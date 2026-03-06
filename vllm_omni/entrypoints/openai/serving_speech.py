@@ -291,10 +291,6 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
         if request.voice is not None:
             request.voice = request.voice.lower()
 
-        # Validate input is not empty
-        if not request.input or not request.input.strip():
-            return "Input text cannot be empty"
-
         # Validate language
         if request.language is not None and request.language not in _TTS_LANGUAGES:
             return f"Invalid language '{request.language}'. Supported: {', '.join(sorted(_TTS_LANGUAGES))}"
@@ -562,6 +558,23 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             raise self.engine_client.dead_error
 
         request_id = f"speech-{random_uuid()}"
+
+        # Empty input → return empty (silent) audio without hitting the engine.
+        if not request.input or not request.input.strip():
+            empty_audio = np.zeros(0, dtype=np.float32)
+            if request.stream:
+                return StreamingResponse(iter([b""]), media_type="audio/pcm")
+            audio_obj = CreateAudio(
+                audio_tensor=empty_audio,
+                sample_rate=24000,
+                response_format=request.response_format or "wav",
+                speed=request.speed or 1.0,
+                stream_format=request.stream_format,
+                base64_encode=False,
+            )
+            audio_response = self.create_audio(audio_obj)
+            _tts_request_success.labels(finished_reason="stop").inc()
+            return Response(content=audio_response.audio_data, media_type=audio_response.media_type)
 
         try:
             if self._is_tts:
