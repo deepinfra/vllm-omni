@@ -59,7 +59,7 @@ _TOKEN_BUCKETS = [1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000]
 _tts_request_success = _get_or_create_counter(
     "vllm:request_success",
     "Count of successfully processed requests.",
-    labelnames=("finished_reason",),
+    labelnames=("finish_reason",),
 )
 _tts_prompt_tokens = _get_or_create_histogram(
     "vllm:request_prompt_tokens",
@@ -443,13 +443,13 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                     )
                     yield self.create_audio(audio_obj).audio_data
             # Streaming completed successfully
-            _tts_request_success.labels(finished_reason="stop").inc()
+            _tts_request_success.labels(finish_reason="stop").inc()
         except asyncio.CancelledError:
-            _tts_request_success.labels(finished_reason="abort").inc()
+            _tts_request_success.labels(finish_reason="abort").inc()
             logger.info("Streaming request %s cancelled by client", request_id)
             raise
         except Exception as e:
-            _tts_request_success.labels(finished_reason="abort").inc()
+            _tts_request_success.labels(finish_reason="abort").inc()
             logger.exception("Streaming speech generation failed for %s: %s", request_id, e)
 
     @staticmethod
@@ -573,7 +573,9 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 base64_encode=False,
             )
             audio_response = self.create_audio(audio_obj)
-            _tts_request_success.labels(finished_reason="stop").inc()
+            _tts_request_success.labels(finish_reason="stop").inc()
+            _tts_prompt_tokens.observe(0)
+            _tts_generation_tokens.observe(0)
             return Response(content=audio_response.audio_data, media_type=audio_response.media_type)
 
         try:
@@ -581,7 +583,7 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 # Validate TTS parameters
                 validation_error = self._validate_tts_request(request)
                 if validation_error:
-                    _tts_request_success.labels(finished_reason="abort").inc()
+                    _tts_request_success.labels(finish_reason="abort").inc()
                     return self.create_error_response(validation_error)
 
                 tts_params = self._build_tts_params(request)
@@ -625,12 +627,12 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
                 final_output = res
 
             if final_output is None:
-                _tts_request_success.labels(finished_reason="abort").inc()
+                _tts_request_success.labels(finish_reason="abort").inc()
                 return self.create_error_response("No output generated from the model.")
 
             audio_output, audio_key = self._extract_audio_output(final_output)
             if audio_key is None:
-                _tts_request_success.labels(finished_reason="abort").inc()
+                _tts_request_success.labels(finish_reason="abort").inc()
                 return self.create_error_response("TTS model did not produce audio output.")
 
             audio_tensor = audio_output[audio_key]
@@ -667,16 +669,16 @@ class OmniOpenAIServingSpeech(OpenAIServing, AudioMixin):
             if gen_tokens is not None:
                 _tts_generation_tokens.observe(gen_tokens)
 
-            _tts_request_success.labels(finished_reason="stop").inc()
+            _tts_request_success.labels(finish_reason="stop").inc()
             return Response(content=audio_response.audio_data, media_type=audio_response.media_type)
 
         except asyncio.CancelledError:
-            _tts_request_success.labels(finished_reason="abort").inc()
+            _tts_request_success.labels(finish_reason="abort").inc()
             return self.create_error_response("Client disconnected")
         except ValueError as e:
-            _tts_request_success.labels(finished_reason="abort").inc()
+            _tts_request_success.labels(finish_reason="abort").inc()
             return self.create_error_response(e)
         except Exception as e:
-            _tts_request_success.labels(finished_reason="abort").inc()
+            _tts_request_success.labels(finish_reason="abort").inc()
             logger.exception("Speech generation failed: %s", e)
             return self.create_error_response(f"Speech generation failed: {e}")
